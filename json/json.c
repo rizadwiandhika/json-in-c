@@ -48,8 +48,12 @@ void Json_SetString(Json *json, const char *key, const char *value);
 void Json_SetNumber(Json *json, const char *key, double value);
 void Json_SetBoolean(Json *json, const char *key, int value);
 void Json_SetNested(Json *json, const char *key, Json *value);
+void __Json_AppendArray(Json *json, ElementValueType type, void *value);
 void Json_AppendArrayAsString(Json *json, const char *value);
-void *Json_Get(Json *json, const char *key);
+void Json_AppendArrayAsNumber(Json *json, double value);
+void Json_AppendArrayAsBoolean(Json *json, int value);
+void Json_AppendArrayAsNested(Json *json, Json *value);
+Entry *Json_Get(Json *json, const char *key);
 void Json_WalkDFS(Json *json, JsonWalker callback, ...);
 void Json_Print(Json *json);
 void __Json_PrintCallback(Entry *entry, ...);
@@ -62,6 +66,7 @@ Entry *__Json_FindEntryByKey(Json *json, const char *key);
 void __Json_Set(Json *json, ElementValueType type, const char *key, void *value);
 void __Json_EntryDelete(Entry *entry);
 char *__Json_Util_CopyString(const char *source);
+void __Json_Util_ExitIfAllocationFailed(void *p);
 
 /* Implementation */
 
@@ -218,7 +223,7 @@ void __Json_Set(Json *json, ElementValueType type, const char *key, void *value)
 
   json->total_entries += 1;
   entry = __Json_NewEntry(type, __Json_Util_CopyString(key), value);
-  printf("New entry[type=%u, key=%s, value=%s]\n", entry->type, entry->key, (char *)entry->value);
+  // printf("New entry[type=%s, key=%s, value=%s]\n", ELEMENT_VALUE_TYPE_STRING[entry->type], entry->key, (char *)entry->value);
   if (json->root == NULL)
   {
     json->root = json->tail = entry;
@@ -249,30 +254,100 @@ void Json_SetNested(Json *json, const char *key, Json *value)
 {
   __Json_Set(json, JSON, key, value);
 }
-void Json_AppendArrayAsString(Json *json, const char *value)
+void __Json_AppendArray(Json *json, ElementValueType type, void *value)
 {
   char key[8] = {0};
   sprintf(key, "%u", json->total_entries);
-  __Json_Set(json, STRING, key, __Json_Util_CopyString(value));
+  __Json_Set(json, type, key, value);
+}
+void Json_AppendArrayAsString(Json *json, const char *value)
+{
+  __Json_AppendArray(json, STRING, __Json_Util_CopyString(value));
+}
+void Json_AppendArrayAsNumber(Json *json, double value)
+{
+  double *v = malloc(sizeof(double));
+  *v = value;
+  __Json_AppendArray(json, NUMBER, v);
+}
+void Json_AppendArrayAsBoolean(Json *json, int value)
+{
+  int *v = malloc(sizeof(int));
+  *v = value;
+  __Json_AppendArray(json, NUMBER, v);
+}
+void Json_AppendArrayAsNested(Json *json, Json *value)
+{
+  __Json_AppendArray(json, JSON, value);
 }
 
-void *Json_Get(Json *json, const char *key)
+Entry *Json_Get(Json *json, const char *key)
 {
   if (json == NULL || json->root == NULL)
   {
     return NULL;
   }
 
-  Entry *entry = json->root;
-  while (entry != NULL)
+  char **paths = __Json_Util_SplitString(key, ".");
+
+  const char *current_key = NULL;
+  Entry *entry = NULL;
+  Json *current_json = json;
+  for (int i = 0; paths[i] != NULL; i++)
   {
-    if (strcmp(entry->key, key) == 0)
+    const char *current_key = paths[i];
+    entry = __Json_FindEntryByKey(current_json, current_key);
+    if (entry == NULL)
     {
-      return entry->value;
+      __Json_Util_DeleteArrayString(paths);
+      return NULL;
     }
-    entry = entry->next;
+
+    // if entry is not JSON, then it is what we're looking
+    if (entry->type != JSON)
+    {
+      break;
+    }
+
+    current_json = entry->value;
   }
-  return NULL;
+
+  __Json_Util_DeleteArrayString(paths);
+  return entry->value;
+}
+
+int __Json_IsWhiteSpace(char ch)
+{
+  return ch == ' ' || ch == '\n';
+}
+
+void __ExitIf(int condition, const char *message)
+{
+  if (condition)
+  {
+    fprintf(stderr, message);
+    fprintf(stderr, "\n");
+    exit(EXIT_FAILURE);
+  }
+}
+
+char *__Json_ParseObject(const char *json)
+{
+  __ExitIf(json[0] != '{', "Invalid json object!");
+
+  // traverese key
+}
+char *__Json_ParseArray(const char *json)
+{
+}
+
+char *Json_ParseFromString(const char *json)
+{
+  int invalid_json = json[0] != '{' || json[0] != '[';
+  __ExitIf(invalid_json, "Json is invalid!");
+
+  int is_object = json[0] == '{';
+  return is_object ? __Json_ParseObject(json) : __Json_ParseArray(json);
 }
 
 char *__Json_Util_CopyString(const char *source)
@@ -281,7 +356,6 @@ char *__Json_Util_CopyString(const char *source)
   strcpy(copied, source);
   return copied;
 }
-
 char *Json_Stringify(Json *json)
 {
   if (json == NULL)
@@ -326,7 +400,6 @@ char *Json_Stringify(Json *json)
   free(overall);
   return end_result;
 }
-
 char *__Json_StringifyEntry(Entry *entry, JsonType context)
 {
   int key_len = context == OBJECT ? strlen(entry->key) : 0;
@@ -383,7 +456,7 @@ char *__Json_StringifyEntry(Entry *entry, JsonType context)
   {
     const char *str_value = Json_Stringify(entry->value);
 
-    int size = strlen(entry->key) + strlen(str_value) + strlen(decorator) + 1;
+    int size = key_len + strlen(str_value) + strlen(decorator) + 1;
     char *data = malloc(sizeof(char) * size);
 
     memset(data, 0, size);
@@ -398,4 +471,51 @@ char *__Json_StringifyEntry(Entry *entry, JsonType context)
 
   printf("[ERROR]: Unknown type of entry: %s\n", ELEMENT_VALUE_TYPE_STRING[entry->type]);
   exit(EXIT_FAILURE);
+}
+char **__Json_Util_SplitString(const char *str, const char *delimiter)
+{
+  int size = 0;
+  char *to_free, *copied_str, *token = NULL;
+  to_free = copied_str = strdup(str);
+  __Json_Util_ExitIfAllocationFailed(to_free);
+
+  while ((token = strsep(&copied_str, delimiter)) != NULL)
+  {
+    size++;
+  }
+
+  char **container = malloc(sizeof(char *) * (size + 1));
+  __Json_Util_ExitIfAllocationFailed(container);
+
+  size = 0;
+  copied_str = to_free;
+  while ((token = strsep(&copied_str, delimiter)) != NULL)
+  {
+    container[size++] = strdup(token);
+    __Json_Util_ExitIfAllocationFailed(container[size - 1]);
+  }
+
+  free(to_free);
+  return container;
+}
+void __Json_Util_DeleteArrayString(char **container)
+{
+  if (container == NULL)
+  {
+    return;
+  }
+  for (int i = 0; container[i] != NULL; i++)
+  {
+    free(container[i]);
+  }
+  free(container);
+}
+void __Json_Util_ExitIfAllocationFailed(void *p)
+
+{
+  if (p == NULL)
+  {
+    fprintf(stderr, "[Error] Memory allocation failed!\n");
+    exit(EXIT_FAILURE);
+  }
 }
