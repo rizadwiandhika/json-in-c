@@ -1,8 +1,6 @@
-# Pure Json Parser in C! 
+# Pure Json Library in C! 
 
-No external library is being used. Just pure C code to work with Json data structure.
-
-This project was created only for fun. I was curious on how Json can be manipulated in such a very basic like C.
+No external library is being used. Just pure C code to work with Json data structure. This project was created only for fun. I was curious on how Json can be manipulated in such a very basic like C.
 
 ### How the Json is Representated in C
 
